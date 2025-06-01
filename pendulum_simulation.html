@@ -1,0 +1,218 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mô Phỏng Con Lắc Đơn</title>
+    <script src="https://cdn.jsdelivr.net/npm/brython@3.12.0/brython.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/brython@3.12.0/brython_stdlib.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            text-align: center;
+            background-color: #f0f0f0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .input-group {
+            margin: 10px 0;
+        }
+        label {
+            margin-right: 10px;
+        }
+        input {
+            padding: 5px;
+            width: 100px;
+        }
+        button {
+            padding: 8px 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        canvas {
+            border: 1px solid #ccc;
+            margin-top: 20px;
+        }
+        #info {
+            margin-top: 10px;
+            font-size: 16px;
+        }
+    </style>
+</head>
+<body onload="brython()">
+    <div class="container">
+        <h2>Mô Phỏng Con Lắc Đơn</h2>
+        <div class="input-group">
+            <label for="length">Chiều dài \( l \) (m):</label>
+            <input type="number" id="length" step="0.1" value="1.0">
+        </div>
+        <div class="input-group">
+            <label for="gravity">Gia tốc trọng trường \( g \) (m/s²):</label>
+            <input type="number" id="gravity" step="0.1" value="9.8">
+        </div>
+        <div class="input-group">
+            <label for="angle">Góc ban đầu \( \theta \) (độ):</label>
+            <input type="number" id="angle" step="1" value="45">
+        </div>
+        <button id="updateBtn">Cập Nhật</button>
+        <button id="startBtn">Thả Con Lắc</button>
+        <canvas id="canvas" width="600" height="400"></canvas>
+        <div id="info"></div>
+    </div>
+
+    <script type="text/python">
+from browser import document, window, timer, bind
+import math
+
+# Lấy canvas và context
+canvas = document["canvas"]
+ctx = canvas.getContext("2d")
+
+# Biến toàn cục
+l = 1.0  # Chiều dài con lắc (m)
+g = 9.8  # Gia tốc trọng trường (m/s²)
+angle = math.pi / 4  # Góc ban đầu (radians)
+angular_velocity = 0
+T = 0  # Chu kỳ
+scale = 200  # Tỷ lệ (pixel/m)
+origin_x = canvas.width / 2
+origin_y = 50
+is_running = False  # Trạng thái con lắc (đứng yên hay dao động)
+
+def calculate_period(l, g):
+    return 2 * math.pi * math.sqrt(l / g)
+
+@bind("#updateBtn", "click")
+def update_pendulum(ev):
+    global l, g, T, angle, angular_velocity, is_running
+    # Lấy giá trị từ ô nhập liệu
+    try:
+        l = float(document["length"].value)
+        g = float(document["gravity"].value)
+        initial_angle_deg = float(document["angle"].value)
+    except ValueError:
+        window.alert("Vui lòng nhập giá trị số hợp lệ!")
+        return
+
+    # Kiểm tra giá trị hợp lệ
+    if l <= 0 or g <= 0:
+        window.alert("Vui lòng nhập giá trị hợp lệ (l và g phải lớn hơn 0)!")
+        return
+    if initial_angle_deg < -90 or initial_angle_deg > 90:
+        window.alert("Góc ban đầu phải nằm trong khoảng -90° đến 90°!")
+        return
+
+    # Tính chu kỳ
+    T = calculate_period(l, g)
+
+    # Cập nhật góc ban đầu (chuyển từ độ sang radians)
+    angle = initial_angle_deg * math.pi / 180
+    angular_velocity = 0
+    is_running = False  # Dừng con lắc khi cập nhật
+    draw()  # Vẽ lại ngay lập tức để hiển thị vị trí ban đầu
+
+@bind("#startBtn", "click")
+def start_pendulum(ev):
+    global is_running
+    is_running = True  # Bắt đầu dao động
+
+def draw():
+    global angle, angular_velocity
+    # Xóa canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+    # Chỉ cập nhật nếu con lắc được thả
+    if is_running:
+        # Tính gia tốc góc: α = -(g/l) * sin(θ)
+        angular_acceleration = -(g / l) * math.sin(angle)
+
+        # Cập nhật vận tốc góc và góc
+        angular_velocity += angular_acceleration * (1 / 60)  # Giả lập thời gian (60 FPS)
+        angle += angular_velocity * (1 / 60)
+
+    # Tính tọa độ quả nặng
+    x = origin_x + l * scale * math.sin(angle)
+    y = origin_y + l * scale * math.cos(angle)
+
+    # Vẽ điểm treo
+    ctx.beginPath()
+    ctx.arc(origin_x, origin_y, 5, 0, 2 * math.pi)
+    ctx.fillStyle = "black"
+    ctx.fill()
+    ctx.closePath()
+
+    # Vẽ dây
+    ctx.beginPath()
+    ctx.moveTo(origin_x, origin_y)
+    ctx.lineTo(x, y)
+    ctx.strokeStyle = "black"
+    ctx.stroke()
+    ctx.closePath()
+
+    # Vẽ quả nặng
+    ctx.beginPath()
+    ctx.arc(x, y, 10, 0, 2 * math.pi)
+    ctx.fillStyle = "red"
+    ctx.fill()
+    ctx.closePath()
+
+    # Hiển thị thông tin
+    document["info"].innerHTML = f"Chu kỳ T: {T:.2f} giây | Góc: {(angle * 180 / math.pi):.1f}°"
+
+# Vòng lặp vẽ (60 FPS)
+timer.set_interval(draw, 1000 / 60)
+
+# Tính chu kỳ ban đầu và vẽ
+T = calculate_period(l, g)
+draw()
+    </script>
+</body>
+</html>
